@@ -1,0 +1,87 @@
+msvgcc, The glorious and horrible Visual-C-on-Linux hack
+
+
+WHY
+
+I have multi-platform code which compiles on Linux and Mingw. Mingw unfortunately didn't support (maybe still doesn't) C++ libraries compiled with Microsoft compiler. I also wanted to test my code on other compilers because this usually exposes latent bugs.
+
+Microsoft has a free version of Visual C but unfortunately
+1) it's Windows-only and I hate leaving Linux for a toy OS, especially since my home computers don't even have Windows
+2) their IDE, like so many others, is absolutely horrible
+3) their compiler can't be used with standard Makefiles because of their nonstandard command-line syntax
+
+Problem 1 can be fixed with wine and if 3 could be fixed then 2 wouldn't be a problem any more. So what to do? After trying to hack a Makefile to pass msvc -style options and making a big mess I decided to create a small wrapper which would parse standard command line options and convert them to nonstandard msvc options.
+
+The result is msvgcc. It's a small and ugly program which can be used like gcc. It takes command line options, does some minimal checking on them and then invokes cl.exe. It also optionally generated make-compatible dependency files. Actually I'm not sure about that optionally thing since I use automatic dependency generation on all my projects. It might try to do this always.
+
+So now you can create Windows binaries with Microsoft compiler from Linux using GNU make. The most amazing thing about it is that it works at all.
+
+This code is in the Public Domain and comes with ABSOLUTELY NO WARRANTY. If it breaks you get to keep all the pieces.
+
+
+
+INSTALLATION
+
+This is not for the faint of heart. Don't try unless you're pretty familiar with Linux and Wine.
+
+You need Linux and relatively recent Wine. Then you need to install Visual C. I have used 2005 Express Edition. 2008 and 2010 didn't work last time I tried. For instructions and updated info check Wine Appdb.
+
+You need to set up Wine PATH variable to include some Visual C directories. I forget exactly how and which. It should be somewhere on Wine Appdb/mailing lists.
+
+Make does not like when there are paths with names. There are some hardcoded paths in the source. You need to create some symlinks or change those paths.
+
+Then install necessary SDKs you might need. Platform SDK and Direct3D SDK are pretty usefull.
+
+The program is written in Haskell and tested using GHC. 6.12 and 7.0 are known to work.
+
+
+
+USAGE
+
+If you have runhaskell you can simply set the executable bit on msvgcc.lhs. It should just work however there's a bug (feature?) in GHCi which pollutes your /tmp directory with lots of empty directories. To avoid this compile into a native executable.
+
+Then just change your Makefile and replace gcc or g++ with msvgcc.
+
+Unrecognized options are passed to cl/link as-is.
+
+If you want to really show off you can add msvgcc.lhs to your source tree and use make order-only dependencies to automatically compile it when it changes. You shouldn't use normal dependencies because you don't actually want to recompile all your source files when msvgcc changes.
+
+
+
+BUGS
+
+Header file handling for dependency generation is pretty simple. If you're not very careful it gives spurious errors and doesn't report them very well.
+
+
+
+Not My BUGS:
+
+Visual C 2008 and 2010 don't work on current Wine. Wine issue.
+
+New-style debugging information (/Zi) does not work, use old-style (/Z7) instead. Might fixed in new Wine (http://bugs.winehq.org/show_bug.cgi?id=19781) but I have not tested this.
+
+On some versions of Wine using optimization or compiling too complex files crashes the compiler. Might have something to do with memory use and might be fixed with latest Wine. I tested Wine 1.3.18 but not extensively.
+
+
+
+TODO:
+The program does what I need it to do so I don't intend TO DO these. Someone else might.
+
+Write better documentation. Especially document what command-line options are parsed/changed and how.
+
+Add support for LTO. When -flto is given on the command line, add options /Og /GL to compiler/linker. Not sure if both flags are needed for both programs or not.
+
+Does not support ccache. Would require some hacks with the preprocessor.
+
+Replace dependency generation with something sane.
+
+Probably does not support distcc. Does Wine require a working X display?
+
+The code is pretty ugly. Beautify it.
+
+There are hardcoded paths. Get rid of them.
+
+This could be extended to other compilers and linkers.
+Example of another compiler would be Intel. I'm not sure if it requires this or not since I have never used it.
+Example of another linker would be crinkler. It's a specialized linker for creating very tiny executables.
+
