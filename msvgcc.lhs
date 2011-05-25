@@ -1,10 +1,15 @@
 #!/usr/bin/env runhaskell
 
-# Originally written by Turo Lamminen.
-# This code is in the Public Domain and comes with ABSOLUTELY NO WARRANTY. If it breaks you get to keep all the pieces.
-
 \begin{code}
 {- OPTIONS_GHC  -Wall -Werror -}
+
+
+{-
+  Originally written by Turo Lamminen.
+  This code is in the Public Domain and comes with ABSOLUTELY NO WARRANTY.
+  If it breaks you get to keep all the pieces.
+-}
+
 
 module Main (main) where
 import Control.Monad (filterM)
