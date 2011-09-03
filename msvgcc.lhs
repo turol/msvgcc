@@ -13,29 +13,21 @@
 
 module Main (main) where
 import Control.Monad (filterM)
-import Data.Char (isSpace)
-import Data.List (intercalate, intersperse, stripPrefix)
-import Data.Maybe (mapMaybe)
-import Data.Set as Set (Set)
+import Data.Char (isSpace, toLower)
+import Data.List (intercalate, isInfixOf, isPrefixOf, nub, sort)
 import qualified Data.Set as Set(
-                         deleteFindMin
-                       , difference
-                       , empty
-                       , fromList
-                       , insert
+                         fromList
                        , member
-                       , null
-                       , singleton
-                       , toList
-                       , union)
+                       )
 import System.Console.GetOpt
 import System.Directory (doesFileExist
                        , canonicalizePath
                        , getCurrentDirectory
-                       , makeRelativeToCurrentDirectory)
+                       )
 import System.Environment (getArgs)
 import System.Exit
 import System.FilePath
+import System.IO (Handle, hGetLine, hIsEOF)
 import System.Process
 
 
@@ -106,11 +98,11 @@ translateOption :: Option -> MsvcOptions -> MsvcOptions
 translateOption CompileOnly            oldOpts = (addOpt "/c" oldOpts) { mode = Compile }
 translateOption (Define str)           oldOpts = addOpt ("/D" ++ str) oldOpts
 translateOption (DependencyFile f)     oldOpts = oldOpts { depFile = f }
-translateOption DependencyGenerate     oldOpts = oldOpts { generateDeps = True }
+translateOption DependencyGenerate     oldOpts = (addOpt "/showIncludes" oldOpts) { generateDeps = True }
 translateOption DependencyPhonyHeaders oldOpts = oldOpts { depPhonyHeaders = True }
 translateOption (DependencyTarget f)   oldOpts = oldOpts { depTarget = f }
 translateOption (IncludeDir dir)       oldOpts = oldOpts { includeDirs = (snoc (includeDirs oldOpts) dir) }
-translateOption (OptFlag flag)         oldOpts = oldOpts  -- FIXME: do something interesting with this
+translateOption (OptFlag _)            oldOpts = oldOpts  -- FIXME: do something interesting with this
 
 
 -- msvc has different option for object and exe output name...
@@ -126,114 +118,79 @@ translateOption (OutputFile out) oldOpts =
 -- translateOption _ oldOpts = oldOpts
 
 
-generateDependecyFile :: String -> MsvcOptions -> IO ()
-generateDependecyFile srcFile opts = do
-  if not $ generateDeps opts
-    then return ()   -- no deps requested
-    else do let targetName = depTarget opts
-            let file = depFile opts
-            
-            includes <- recursiveIncludes (includeDirs opts) srcFile
-            
-            let deps =
-                 -- the main target
-                 targetName ++ ": " ++ (intercalate " " (Set.toList includes))
-                  ++ "\n"
-                   -- empty target for all include files
-                   -- to avoid build errors when include files deleted
-                  ++ (concatMap (\x -> x ++ ":\n") (Set.toList includes))
-            
-            writeFile file deps
+replaceBackslash :: Char -> Char
+replaceBackslash '\\' = '/'
+replaceBackslash c@_  = c
 
 
--- recursively find files included by a file
--- recursiveIncludes includeDirs file (set of includes)
-recursiveIncludes :: [String] -> String -> IO (Set String)
-recursiveIncludes includeDirectories = do
-  recursiveIncludes' Set.empty . Set.singleton
+isInDefaultIncludeDir :: String -> Bool
+isInDefaultIncludeDir filename =
+  any (\dir -> isPrefixOf (map toLower dir) (map toLower filename)) defaultIncludeDirs
+
+
+fromWineFiles :: [String] -> IO [String]
+fromWineFiles [] = return []
+fromWineFiles files = do
+  out <- readProcess "winepath" files ""
+  
+  let lines0 = lines $ filter (/= '\r') out
+  out2 <- case lines0 of
+            [] -> return []
+            _  -> readProcess "realpath" lines0 ""
+  
+  return $ lines out2
+
+
+-- read msvc output, grab include files to dependency file
+generateDependencies :: MsvcOptions -> ProcessHandle -> Handle -> IO ExitCode
+generateDependencies opts msvcProcess outHandle = do
+  (exitCode, includes') <- readOutputLoop []
+  
+  let targetName = depTarget opts
+  let file = depFile opts
+  
+  -- drop prefix, change '\' to '/', sort and drop duplicates
+  let includes'' = nub $ sort $ map (map replaceBackslash . dropWhile isSpace . (drop (length "Note: including file:"))) includes'
+  
+  -- drop headers in default include dirs
+  let includes''' = filter (not . isInDefaultIncludeDir) includes''
+  
+  includes <- fromWineFiles includes'''
+  
+  let deps =
+       -- the main target
+       targetName ++ ": " ++ (intercalate " " includes)
+        ++ "\n"
+         -- empty target for all include files
+         -- to avoid build errors when include files deleted
+        ++ (concatMap (\x -> x ++ ":\n") includes)
+  
+  writeFile file deps
+  return exitCode
   where
-    recursiveIncludes' :: Set String -> Set String -> IO (Set String)
-    recursiveIncludes' accum todo = do
-      -- if todo has become empty, we're done
-      if Set.null todo
-        then return accum
-        else do
-          let (filename, newTodo) = Set.deleteFindMin todo
-          
-          -- read the raw includes
-          -- contains filenames without full path
-          -- but might have relative paths
-          rawIncludes <- readIncludes filename
-          
-          -- resolve with the help of includeDirs
-          -- also need to add path of file being currently processed
-          -- and the current working dir
-          realIncludes <- mapM (findRealInclude (".":(takeDirectory filename):includeDirectories)) $ Set.toList rawIncludes
-          
-          -- check we found all we were looking for
-          (includes0, errors) <- checkIncludes realIncludes
-          
-          -- if errors, exit immediately
-          -- FIXME: collect all errors and exit at the end
-          if not $ null errors
-            then do putStrLn $ "recursiveIncludes error while processing " ++ filename ++  ": "
-                    mapM_ putStrLn errors
-                    exitFailure
-            else return ()
-          
-          -- see if any new
-          let newIncludes = Set.difference includes0 accum
-          let newAccum = Set.union accum newIncludes
-          
-          -- recurse
-          recursiveIncludes' newAccum (Set.union newTodo newIncludes)
-
--- look through include paths and find the full path of an include
--- returns (raw include read from file, path to it)
-findRealInclude :: [String] -> String -> IO (String, [String])
-findRealInclude includeDirectories includeFileName = do
-  let potentialNames = map (\x -> x ++ ('/':includeFileName)) includeDirectories
-  filesThatExist <- filterM doesFileExist potentialNames
-  return (includeFileName, filesThatExist)
-
--- takes a filename and list of possible directories
--- returns a set of files (with path) and a list of errors
--- if list nonempty, error occurred
-checkIncludes :: [(String, [String])] -> IO (Set String, [String])
-checkIncludes =
-  checkIncludes' (Set.empty, [])
-  where
-    checkIncludes' :: (Set String, [String]) -> [(String, [String])] -> IO (Set String, [String])
-    checkIncludes' accum [] = return accum
     
-    -- includename = short include name read from file
-    -- includePaths = candidates for the real location
-    checkIncludes' (includeAccum, errorAccum) ((includeName, includePaths):xs) = do
-      -- check that includePaths is not empty
-      case includePaths of
-        []              -> checkIncludes' (includeAccum, ("no candidates found for " ++ includeName):errorAccum) xs
-        -- grab the first as path
-        (includePath:_) -> checkIncludes' (Set.insert includePath includeAccum, errorAccum) xs
-
-
--- find files included by a file
-readIncludes :: String -> IO (Set String)
-readIncludes cppFile = do
-  contents <- readFile cppFile
-  return $ parseIncludes contents
-  where
-    parseIncludes :: String -> Set String
-    parseIncludes str =
-      Set.fromList includeLines
-      where
-        l = lines str
-        includeLines = mapMaybe isIncludeLine l
-        isIncludeLine str = do
-          tmp1 <- stripPrefix "#include" str
-          let tmp2 = dropWhile isSpace tmp1
-          case tmp2 of
-            '"':str -> return $ takeWhile (/= '"') str
-            _       -> Nothing
+  	-- read input until process ends
+    -- put includes in a list
+    -- print everything else in stdout
+    readOutputLoop :: [String] -> IO (ExitCode, [String])
+    readOutputLoop accum = do
+      eof <- hIsEOF outHandle
+      if eof
+        then do c <- waitForProcess msvcProcess
+                return (c, accum)
+        else do 
+                l <- hGetLine outHandle
+                let isInclude = isInfixOf "Note: including file" l
+                let newAccum = if isInclude
+                                 then l:accum
+                                 else accum
+                
+                -- not include, put in stdout
+                if not isInclude
+                  then putStrLn l
+                  else return ()
+                
+                readOutputLoop newAccum
 
 
 dropCommonPrefix :: Eq a => [a] -> [a] -> ([a], [a])
@@ -256,6 +213,24 @@ realMakeRelative path filename =
       droppedPathComponents = length splitNewPath
   in joinPath $ (replicate droppedPathComponents "..") ++ splitNewFilename
   -- show (newPath, newFilename)
+
+
+defaultIncludeDirs :: [String]
+defaultIncludeDirs =
+ [ "C:/winsdk/include"
+ , "C:/msvcInc"
+ , "C:/msPlatInc"
+ , "C:/miscShit"
+ ]
+
+
+defaultLibDirs :: [String]
+defaultLibDirs = 
+  [ "c:/winsdk/lib"
+  , "c:/msvcLib"
+  , "c:/msPlatLib"
+  , "c:/miscShit"
+  ]
 
 
 main :: IO ()
@@ -339,18 +314,8 @@ main = do
   -- tack include dirs and nonoptions to the end
   let opts3 = (clOptions opts2) ++ sources1
   
-  let defaultCompilerOpts = 
-              [ "/IC:/winsdk/include"
-              , "/IC:/msvcInc"
-              , "/IC:/msPlatInc"
-              , "/IC:/miscShit"
-              ]
-  let defaultLinkerOpts = [ "/link"
-                   , "/LIBPATH:C:/winsdk/lib"
-                   , "/LIBPATH:C:/msvcLib"
-                   , "/LIBPATH:C:/msPlatLib"
-                   , "/LIBPATH:C:/miscShit"
-                   ]
+  let defaultCompilerOpts = map (\x -> "/I" ++ x) defaultIncludeDirs
+  let defaultLinkerOpts = "/link":(map (\x -> "/LIBPATH:" ++ x) defaultLibDirs)
   
   -- add compiler or linker opts depending on mode
   let opts4 =
@@ -361,13 +326,17 @@ main = do
   
   -- start the compiler in background
   mapM_ putStrLn opts4
-  (_, _, _, handle) <- createProcess (proc exe opts4)
-  
-  -- generate dependency file
-  generateDependecyFile (head sources) opts2
+  let outHandle = if generateDeps opts2
+                    then CreatePipe
+                    else Inherit
+  let msvcProcess = (proc exe opts4) { std_out = outHandle }
+  (_, msvcOut, _, handle) <- createProcess msvcProcess
   
   -- wait for compiler to finish
-  exitCode <- waitForProcess handle
+  -- generate dependency file
+  exitCode <- case msvcOut of
+                Nothing   -> waitForProcess handle
+                Just o    -> generateDependencies opts2 handle o
   
   exitWith exitCode
 
