@@ -14,7 +14,7 @@
 module Main (main) where
 import Control.Monad (filterM)
 import Data.Char (isSpace, toLower)
-import Data.List (intercalate, isInfixOf, isPrefixOf, nub, sort)
+import Data.List (intercalate, isInfixOf, isPrefixOf, isSuffixOf, nub, sort)
 import qualified Data.Set as Set(
                          fromList
                        , member
@@ -107,7 +107,7 @@ translateOption (OptFlag _)            oldOpts = oldOpts  -- FIXME: do something
 
 -- msvc has different option for object and exe output name...
 translateOption (OutputFile out) oldOpts =
-  addOpt (newOpt ++ out) oldOpts
+  addOpt (newOpt ++ out) (oldOpts { depTarget = out, depFile = reverse $ "d." ++ (drop 4 $ reverse out) })
   where
     newOpt =
       case mode oldOpts of
@@ -266,13 +266,14 @@ main = do
   let exe = "wine"
   let opts0 = [ "C:\\Program Files\\Microsoft Visual Studio 8\\VC\\bin\\cl.exe" ]
   
-  sources <- filterM doesFileExist nonOptions
+  sources0 <- filterM doesFileExist nonOptions
   
+  let sourceSet = Set.fromList sources0
+  let opts00 = filter (\x -> not $ Set.member x sourceSet) nonOptions
+  
+  let sources = filter (\x -> not (".d" `isSuffixOf` x)) sources0
   putStrLn "Sources:"
   mapM_ putStrLn sources
-  
-  let sourceSet = Set.fromList sources
-  let opts00 = filter (\x -> not $ Set.member x sourceSet) nonOptions
   
   putStrLn "opts00:"
   mapM_ putStrLn opts00
