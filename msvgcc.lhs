@@ -39,6 +39,7 @@ data Option
  | DependencyPhonyHeaders
  | DependencyTarget String    -- name of target in dependency file
  | IncludeDir String
+ | NoWarnings
  | OptFlag String
  | OutputFile String
    deriving Show
@@ -52,6 +53,7 @@ optDescription =
   , Option "I" [] (ReqArg IncludeDir "dir") "Include directory"
   , Option "M" [] (ReqArg depGen "dep") "Dependency generation"
   , Option "o" [] (ReqArg OutputFile "out") "Output file"
+  , Option "w" [] (NoArg NoWarnings) "Disable warnings"
   ]
 
 
@@ -102,6 +104,7 @@ translateOption DependencyGenerate     oldOpts = (addOpt "/showIncludes" oldOpts
 translateOption DependencyPhonyHeaders oldOpts = oldOpts { depPhonyHeaders = True }
 translateOption (DependencyTarget f)   oldOpts = oldOpts { depTarget = f }
 translateOption (IncludeDir dir)       oldOpts = oldOpts { includeDirs = (snoc (includeDirs oldOpts) dir) }
+translateOption NoWarnings             oldOpts = (addOpt "/w" oldOpts)
 translateOption (OptFlag _)            oldOpts = oldOpts  -- FIXME: do something interesting with this
 
 
