@@ -321,7 +321,7 @@ main = do
   -- add compiler or linker opts depending on mode
   let opts4 =
        if mode opts2 == Compile
-         then opts3 ++ defaultCompilerOpts ++ (map ("/I" ++ ) (includeDirs opts2)) ++ opts00
+         then opts3 ++ (map ("/I" ++ ) (includeDirs opts2)) ++ defaultCompilerOpts ++ opts00
          else opts3 ++ defaultLinkerOpts ++ opts00
   
   
